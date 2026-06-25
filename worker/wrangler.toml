@@ -1,0 +1,10 @@
+name = "agenthub-worker"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+[[kv_namespaces]]
+binding = "AGENTS_KV"
+id = "3cbf325e10b74808a8986bee497e16f8"
+
+[vars]
+WORKER_ENV = "production"
