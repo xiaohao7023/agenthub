@@ -1,65 +1,51 @@
 #!/usr/bin/env python3
-"""
-Hermes Agent Unpair Script
-取消配对
-"""
+"""取消Agent配对"""
 
 import os
 import json
+from pathlib import Path
+
+# 加载 .env 文件
+def load_env():
+    env_file = Path(__file__).parent.parent / ".env"
+    if env_file.exists():
+        with open(env_file) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    os.environ.setdefault(k.strip(), v.strip())
+
+load_env()
 import urllib.request
 from pathlib import Path
 
-WORKER_URL = os.environ.get("AGENTHUB_WORKER_URL", "https://agenthub.your-domain.com")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://awvggmbixfvmlmkpivqr.supabase.co")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "eyJhbG...BNKA")
 CONFIG_FILE = Path.home() / ".hermes" / "agenthub" / "config.json"
 
-def unpair_agent(code):
-    """从云端取消配对"""
-    url = f"{WORKER_URL}/api/unpair"
-    data = json.dumps({"code": code}).encode('utf-8')
-    
-    req = urllib.request.Request(
-        url,
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST"
-    )
-    
-    try:
-        with urllib.request.urlopen(req, timeout=10) as response:
-            return json.loads(response.read().decode('utf-8'))
-    except Exception as e:
-        print(f"❌ 取消配对失败: {e}")
-        return None
+def api_delete(path):
+    url = f"{SUPABASE_URL}/rest/v1/{path}"
+    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+    req = urllib.request.Request(url, headers=headers, method="DELETE")
+    urllib.request.urlopen(req, timeout=10)
 
 def main():
-    """主函数"""
-    # 检查配置文件
     if not CONFIG_FILE.exists():
         print("❌ 未找到配对配置")
-        print("💡 当前没有配对的Agent")
         return
     
-    with open(CONFIG_FILE, 'r') as f:
+    with open(CONFIG_FILE) as f:
         config = json.load(f)
     
     code = config.get("code")
-    if not code:
-        print("❌ 配对码无效")
-        return
+    print(f"🔗 正在取消配对 {code}...")
     
-    print("🔗 正在取消配对...\n")
+    api_delete(f"messages?agent_code=eq.{code}")
+    api_delete(f"agents?code=eq.{code}")
     
-    # 取消配对
-    result = unpair_agent(code)
-    
-    if result and result.get("success"):
-        print("✅ 配对已取消！\n")
-        
-        # 删除配置文件
-        CONFIG_FILE.unlink()
-        print("💾 配置已删除")
-    else:
-        print("❌ 取消配对失败")
+    CONFIG_FILE.unlink(missing_ok=True)
+    print("✅ 已取消配对")
 
 if __name__ == "__main__":
     main()

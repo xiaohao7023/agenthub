@@ -1,132 +1,122 @@
 #!/usr/bin/env python3
 """
-Hermes Agent Pair Script
-生成配对码并注册到AgentHub云端
+AgentHub Pair Script - Supabase 版本
+生成配对码并注册到 Supabase
 """
 
 import os
 import sys
+from pathlib import Path
+
+# 加载 .env 文件
+def load_env():
+    env_file = Path(__file__).parent.parent / ".env"
+    if env_file.exists():
+        with open(env_file) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    os.environ.setdefault(k.strip(), v.strip())
+
+load_env()
 import json
 import secrets
 import string
 import urllib.request
 import urllib.error
 from pathlib import Path
+from datetime import datetime
 
 # 配置
-WORKER_URL = os.environ.get("AGENTHUB_WORKER_URL", "https://agenthub-worker.huangxiaohao9121.workers.dev")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://awvggmbixfvmlmkpivqr.supabase.co")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "eyJhbG...BNKA")
 CONFIG_DIR = Path.home() / ".hermes" / "agenthub"
 CONFIG_FILE = CONFIG_DIR / "config.json"
+
+def api_call(method, path, data=None):
+    """调用 Supabase REST API"""
+    url = f"{SUPABASE_URL}/rest/v1/{path}"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation"
+    }
+    
+    body = json.dumps(data).encode() if data else None
+    req = urllib.request.Request(url, data=body, headers=headers, method=method)
+    
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = json.loads(resp.read().decode())
+            return result[0] if isinstance(result, list) and len(result) == 1 else result
+    except urllib.error.HTTPError as e:
+        error = json.loads(e.read().decode())
+        print(f"❌ API错误: {error.get('message', str(e))}")
+        return None
 
 def generate_pair_code():
     """生成8位大写字母+数字的配对码"""
     alphabet = string.ascii_uppercase + string.digits
-    # 排除容易混淆的字符：0/O, 1/I/L
     safe_alphabet = ''.join(c for c in alphabet if c not in '0O1IL')
     return ''.join(secrets.choice(safe_alphabet) for _ in range(8))
 
 def detect_agent_type():
     """检测Agent类型"""
-    # 检查OpenClaw
     if (Path.home() / ".openclaw").exists():
         return "openclaw"
-    
-    # 检查Hermes
     if (Path.home() / ".hermes").exists():
         return "hermes"
-    
-    # 检查Claude Code
     if (Path.home() / ".claude").exists():
         return "claude-code"
-    
-    # 检查Codex
-    if (Path.home() / ".codex").exists():
-        return "codex"
-    
-    # 检查Kimi Code
-    if os.environ.get("KIMI_CODE"):
-        return "kimi-code"
-    
     return "unknown"
 
 def detect_agent_name():
     """检测Agent名称"""
-    # 从配置文件读取
     config_file = Path.home() / ".hermes" / "config.yaml"
     if config_file.exists():
         with open(config_file, 'r') as f:
             for line in f:
                 if line.startswith("name:"):
                     return line.split(":", 1)[1].strip()
-    
-    # 默认名称
     return "Hermes Agent"
 
-def register_pair_code(code, agent_type, agent_name):
-    """向云端注册配对码"""
-    url = f"{WORKER_URL}/api/pair"
-    data = json.dumps({
-        "code": code,
-        "type": agent_type,
-        "name": agent_name
-    }).encode('utf-8')
-    
-    req = urllib.request.Request(
-        url,
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST"
-    )
-    
-    try:
-        with urllib.request.urlopen(req, timeout=10) as response:
-            result = json.loads(response.read().decode('utf-8'))
-            return result
-    except urllib.error.URLError as e:
-        print(f"❌ 注册失败: {e}")
-        return None
-
-def save_config(code, agent_type, agent_name):
-    """保存配对配置"""
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    
-    config = {
-        "code": code,
-        "type": agent_type,
-        "name": agent_name,
-        "paired_at": str(__import__('datetime').datetime.now()),
-        "worker_url": WORKER_URL
-    }
-    
-    with open(CONFIG_FILE, 'w') as f:
-        json.dump(config, f, indent=2)
-
 def main():
-    """主函数"""
     print("🔗 正在生成配对码...\n")
     
-    # 检测Agent类型
     agent_type = detect_agent_type()
     agent_name = detect_agent_name()
     print(f"📱 Agent类型: {agent_type}")
     print(f"📛 Agent名称: {agent_name}\n")
     
-    # 生成配对码
     code = generate_pair_code()
     print(f"🔑 配对码: {code}\n")
     
-    # 注册到云端
-    print("☁️ 正在注册到云端...")
-    result = register_pair_code(code, agent_type, agent_name)
+    print("☁️ 正在注册到 Supabase...")
+    result = api_call("POST", "agents", {
+        "code": code,
+        "type": agent_type,
+        "name": agent_name,
+        "status": "online"
+    })
     
-    if result and result.get("success"):
+    if result and result.get("id"):
         print("✅ 注册成功！\n")
         
         # 保存配置
-        save_config(code, agent_type, agent_name)
-        print("💾 配置已保存\n")
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        config = {
+            "code": code,
+            "type": agent_type,
+            "name": agent_name,
+            "paired_at": datetime.now().isoformat(),
+            "supabase_url": SUPABASE_URL
+        }
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump(config, f, indent=2)
         
-        # 显示配对信息
+        print("💾 配置已保存\n")
         print("=" * 50)
         print("📱 请在手机APP中输入以下配对码：")
         print(f"\n🔑 {code}\n")

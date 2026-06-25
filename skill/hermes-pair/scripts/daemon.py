@@ -1,153 +1,102 @@
 #!/usr/bin/env python3
 """
-Hermes Agent Daemon Script
-守护进程：定期发送心跳，处理来自APP的消息
+AgentHub 守护进程 - 定时发送心跳 + 获取消息
+每30秒发送一次心跳，同时拉取待处理消息
 """
 
 import os
 import sys
+from pathlib import Path
+
+# 加载 .env 文件
+def load_env():
+    env_file = Path(__file__).parent.parent / ".env"
+    if env_file.exists():
+        with open(env_file) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    os.environ.setdefault(k.strip(), v.strip())
+
+load_env()
 import json
 import time
-import threading
 import urllib.request
 import urllib.error
 from pathlib import Path
+from datetime import datetime
 
-WORKER_URL = os.environ.get("AGENTHUB_WORKER_URL", "https://agenthub.your-domain.com")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://awvggmbixfvmlmkpivqr.supabase.co")
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "eyJhbG...BNKA")
 CONFIG_FILE = Path.home() / ".hermes" / "agenthub" / "config.json"
-HEARTBEAT_INTERVAL = 3600  # 1小时
-MESSAGE_CHECK_INTERVAL = 10  # 10秒
+HEARTBEAT_INTERVAL = 30  # 秒
 
-def load_config():
-    """加载配置"""
-    if not CONFIG_FILE.exists():
-        print("❌ 未找到配对配置")
-        print("💡 请先运行 '配对' 命令生成配对码")
+def api_call(method, path, data=None):
+    url = f"{SUPABASE_URL}/rest/v1/{path}"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=representation"
+    }
+    body = json.dumps(data).encode() if data else None
+    req = urllib.request.Request(url, data=body, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = json.loads(resp.read().decode())
+            return result[0] if isinstance(result, list) and len(result) == 1 else result
+    except Exception as e:
         return None
-    
-    with open(CONFIG_FILE, 'r') as f:
-        return json.load(f)
 
 def send_heartbeat(code):
-    """发送心跳"""
-    url = f"{WORKER_URL}/api/heartbeat"
-    data = json.dumps({"code": code, "status": "online"}).encode('utf-8')
-    
-    req = urllib.request.Request(
-        url,
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST"
-    )
-    
-    try:
-        with urllib.request.urlopen(req, timeout=10) as response:
-            return True
-    except Exception as e:
-        print(f"💓 心跳发送失败: {e}")
-        return False
+    return api_call("PATCH", f"agents?code=eq.{code}", {
+        "last_heartbeat": datetime.utcnow().isoformat(),
+        "status": "online"
+    })
 
-def check_messages(code):
-    """检查待处理消息"""
-    url = f"{WORKER_URL}/api/messages/{code}"
-    
-    req = urllib.request.Request(url, headers={"Content-Type": "application/json"})
-    
-    try:
-        with urllib.request.urlopen(req, timeout=10) as response:
-            data = json.loads(response.read().decode('utf-8'))
-            return data.get("messages", [])
-    except Exception as e:
-        print(f"📥 消息检查失败: {e}")
-        return []
+def get_pending_messages(code):
+    return api_call("GET", f"messages?select=*&agent_code=eq.{code}&status=eq.pending&order=created_at.asc")
 
-def send_response(code, message_id, response_text):
-    """发送响应"""
-    url = f"{WORKER_URL}/api/response"
-    data = json.dumps({
-        "code": code,
-        "messageId": message_id,
-        "response": response_text
-    }).encode('utf-8')
-    
-    req = urllib.request.Request(
-        url,
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST"
-    )
-    
-    try:
-        with urllib.request.urlopen(req, timeout=10) as response:
-            return True
-    except Exception as e:
-        print(f"📤 发送响应失败: {e}")
-        return False
-
-def process_message(code, message):
-    """处理消息"""
-    msg_id = message.get("id")
-    msg_text = message.get("message", "")
-    msg_from = message.get("from", "unknown")
-    
-    print(f"📩 收到消息 [{msg_from}]: {msg_text}")
-    
-    # 这里可以集成Hermes的命令处理逻辑
-    # 目前简单返回一个确认消息
-    response = f"✅ 收到命令: {msg_text}\n正在处理中..."
-    
-    # 发送响应
-    send_response(code, msg_id, response)
-    print(f"📤 已响应消息: {msg_id}")
-
-def heartbeat_loop(code):
-    """心跳循环"""
-    while True:
-        send_heartbeat(code)
-        time.sleep(HEARTBEAT_INTERVAL)
-
-def message_loop(code):
-    """消息检查循环"""
-    while True:
-        messages = check_messages(code)
-        for msg in messages:
-            process_message(code, msg)
-        time.sleep(MESSAGE_CHECK_INTERVAL)
+def mark_message_done(msg_id):
+    return api_call("PATCH", f"messages?id=eq.{msg_id}", {"status": "done"})
 
 def main():
-    """主函数"""
-    # 加载配置
-    config = load_config()
-    if not config:
+    if not CONFIG_FILE.exists():
+        print("❌ 未找到配对配置，请先运行 pair.py")
         sys.exit(1)
     
-    code = config.get("code")
-    if not code:
-        print("❌ 配对码无效")
-        sys.exit(1)
+    with open(CONFIG_FILE) as f:
+        config = json.load(f)
     
-    print("🚀 AgentHub 守护进程启动")
-    print(f"📱 Agent: {config.get('name', 'Unknown')}")
-    print(f"🔑 配对码: {code}")
-    print(f"☁️ 云端: {WORKER_URL}")
-    print("\n按 Ctrl+C 停止\n")
+    code = config["code"]
+    print(f"🤖 AgentHub 守护进程启动")
+    print(f"   配对码: {code}")
+    print(f"   心跳间隔: {HEARTBEAT_INTERVAL}秒")
+    print(f"   按 Ctrl+C 停止\n")
     
-    # 启动心跳线程
-    heartbeat_thread = threading.Thread(target=heartbeat_loop, args=(code,), daemon=True)
-    heartbeat_thread.start()
-    print("💓 心跳线程已启动")
-    
-    # 启动消息检查线程
-    message_thread = threading.Thread(target=message_loop, args=(code,), daemon=True)
-    message_thread.start()
-    print("📥 消息检查线程已启动")
-    
-    # 保持主线程运行
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("\n🛑 守护进程已停止")
+    while True:
+        try:
+            # 发送心跳
+            send_heartbeat(code)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] 💓 心跳已发送")
+            
+            # 检查消息
+            messages = get_pending_messages(code)
+            if messages and isinstance(messages, list) and len(messages) > 0:
+                for msg in messages:
+                    print(f"📩 收到消息: {msg['content']}")
+                    # TODO: 这里可以接入 Agent 的消息处理逻辑
+                    mark_message_done(msg["id"])
+            
+            time.sleep(HEARTBEAT_INTERVAL)
+            
+        except KeyboardInterrupt:
+            print("\n🛑 守护进程已停止")
+            break
+        except Exception as e:
+            print(f"⚠️ 错误: {e}")
+            time.sleep(HEARTBEAT_INTERVAL)
 
 if __name__ == "__main__":
     main()

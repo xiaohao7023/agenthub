@@ -78,6 +78,66 @@ const server = http.createServer(async (req, res) => {
       return res.end(JSON.stringify({ status: 'ok', timestamp: new Date().toISOString() }));
     }
 
+    // Setup page - GET /setup
+    if (path === '/setup' && method === 'GET') {
+      const setupHtml = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AgentHub Setup</title>
+<style>
+body{font-family:-apple-system,sans-serif;background:#f5f5f5;padding:20px;display:flex;justify-content:center}
+.card{background:#fff;border-radius:12px;padding:24px;max-width:360px;width:100%;box-shadow:0 2px 8px rgba(0,0,0,.1)}
+h2{margin-bottom:16px;color:#333}.field{margin-bottom:14px}
+label{display:block;font-size:13px;color:#666;margin-bottom:4px}
+input{width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;font-size:14px}
+button{width:100%;padding:12px;background:#4CAF50;color:#fff;border:none;border-radius:8px;font-size:16px;cursor:pointer}
+.ok{margin-top:16px;padding:12px;background:#e8f5e9;border-radius:8px;display:none;color:#2e7d32}
+.err{background:#ffebee;color:#c62828}</style></head>
+<body><div class="card"><h2>🔗 AgentHub 配置</h2>
+<div class="field"><label>Anon Key</label><input id="a" placeholder="eyJ..."></div>
+<div class="field"><label>Service Role Key</label><input id="s" placeholder="eyJ..."></div>
+<button onclick="save()">保存配置</button>
+<div id="msg" class="ok"></div></div>
+<script>
+async function save(){
+const a=document.getElementById('a').value.trim();
+const s=document.getElementById('s').value.trim();
+const m=document.getElementById('msg');
+if(!a||!s){m.className='ok err';m.style.display='block';m.textContent='请填写两个Key';return}
+try{const r=await fetch('/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({anon:a,service:s})});
+const d=await r.json();if(d.ok){m.className='ok';m.style.display='block';m.textContent='✅ 配置成功！'}
+else{m.className='ok err';m.style.display='block';m.textContent='❌ '+d.error}}
+catch(e){m.className='ok err';m.style.display='block';m.textContent='❌ 网络错误'}}
+</script></body></html>`;
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      return res.end(setupHtml);
+    }
+
+    // Setup save - POST /setup
+    if (path === '/setup' && method === 'POST') {
+      const body = await parseBody(req);
+      const { anon, service } = body;
+      if (!anon || !service) {
+        res.writeHead(400, headers);
+        return res.end(JSON.stringify({ error: 'Missing keys' }));
+      }
+      const fs = require('fs');
+      const envContent = `SUPABASE_URL=https://awvggmbixfvmlmkpivqr.supabase.co\nSUPABASE_ANON_KEY=${anon}\nSUPABASE_SERVICE_KEY=${service}\n`;
+      const paths = [
+        require('os').homedir() + '/agenthub/.env',
+        require('os').homedir() + '/.hermes/skills/hermes-pair/.env'
+      ];
+      for (const p of paths) {
+        require('path').dirname(p).split('/').reduce((acc, dir) => {
+          const full = acc + '/' + dir;
+          if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
+          return full;
+        }, '');
+        fs.writeFileSync(p, envContent);
+      }
+      res.writeHead(200, headers);
+      return res.end(JSON.stringify({ ok: true }));
+    }
+
     // POST /api/pair
     if (path === '/api/pair' && method === 'POST') {
       const body = await parseBody(req);
